@@ -13,7 +13,8 @@
 - Prefix-subset queries: `knn_prefix(query, k, prefix_len)` ignores candidates with birth index `>= prefix_len` without rebuilding.
 - Successor-table construction from insertion-time Delaunay neighborhoods.
 - Optional 3D Delaunay backend behind `--features delaunay-3d`:
-  - `Delaunay3dKernel` inserts points into a real incremental 3D Delaunay triangulation.
+  - Built-in, custom-optimized 3D Bowyer-Watson Delaunay triangulation with Shewchuk's adaptive precision predicates (via the `robust` crate).
+  - Walk-based point location starting from the last inserted tetrahedron using Z-order spatial sorting + Biased Randomized Incremental Ordering (BRIO), avoiding KD-trees.
   - `SuccessorTable::from_delaunay3d(points)` builds successor lists from 3D Delaunay insertions.
   - `ManifoldKnn::<3>::from_delaunay(points)` builds a query index directly.
   - `DelaunayManifoldKnn3` keeps the Delaunay backend and query index synchronized during insertions and deletions.
@@ -30,28 +31,28 @@ Default build:
 
 ```toml
 [dependencies]
-manifold-knn = { version = "0.6.1" }
+manifold-knn = { version = "0.7.1" }
 ```
 
 3D Delaunay backend:
 
 ```toml
 [dependencies]
-manifold-knn = { version = "0.6.1", features = ["delaunay-3d"] }
+manifold-knn = { version = "0.7.1", features = ["delaunay-3d"] }
 ```
 
 Parallel processing (for large successor table construction and validation):
 
 ```toml
 [dependencies]
-manifold-knn = { version = "0.6.1", features = ["parallel"] }
+manifold-knn = { version = "0.7.1", features = ["parallel"] }
 ```
 
 SIMD-accelerated distance calculations (uses `std::simd`):
 
 ```toml
 [dependencies]
-manifold-knn = { version = "0.6.1", features = ["simd"] }
+manifold-knn = { version = "0.7.1", features = ["simd"] }
 ```
 
 The `simd` feature requires a **nightly** Rust compiler because it depends on the unstable `portable_simd` feature:
@@ -59,8 +60,6 @@ The `simd` feature requires a **nightly** Rust compiler because it depends on th
 ```bash
 cargo +nightly test --features simd
 ```
-
-The optional `delaunay` backend currently pins `delaunay = "=0.7.8"`. That crate declares Rust 1.95, so this package also declares Rust 1.95.
 
 ## Quick start
 
@@ -209,7 +208,7 @@ fn delete() -> Result<(), manifold_knn::Error> {
 }
 ```
 
-`DelaunayManifoldKnn3::delete` removes the vertex in the upstream triangulation, runs flip-based Delaunay repair, and conservatively inserts all current active Delaunay graph edges into the successor table. This keeps queries exact, but it may make the table denser than the minimal local-cavity update after many deletions.
+`DelaunayManifoldKnn3::delete` marks the vertex as inactive, rebuilds the triangulation from scratch using the remaining active vertices (highly optimized and allocation-free), and updates the successor table with the active Delaunay edges.
 
 For small data, `delete_rebuild_complete` is a correctness-first fallback.
 
@@ -219,7 +218,7 @@ The DP k-NN query is exact when the successor table satisfies the paper's invari
 
 Floating-point ties are ordered by birth index for deterministic output. Like the paper's geometric argument, best performance and cleanest behavior are expected under non-degenerate point sets.
 
-The `delaunay-3d` backend inherits the upstream crate's behavior for degeneracy, insertion failures, and removal limitations. The wrapper reports those errors as `Error::DelaunayKernel` instead of silently falling back.
+The custom `delaunay-3d` backend handles coincident/duplicate points gracefully by mapping them to existing vertices without duplicating geometry, protecting against numerical degeneracies.
 
 ## Development
 
