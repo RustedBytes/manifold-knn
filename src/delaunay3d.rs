@@ -96,7 +96,14 @@ impl KdTree {
     pub fn find_nearest(&self, points: &[[f64; 3]], query: [f64; 3]) -> Option<usize> {
         let mut best_idx = None;
         let mut best_dist_sq = f64::INFINITY;
-        self.nearest_recurse(self.root, 0, points, query, &mut best_idx, &mut best_dist_sq);
+        self.nearest_recurse(
+            self.root,
+            0,
+            points,
+            query,
+            &mut best_idx,
+            &mut best_dist_sq,
+        );
         best_idx
     }
 
@@ -109,11 +116,14 @@ impl KdTree {
         best_idx: &mut Option<usize>,
         best_dist_sq: &mut f64,
     ) {
-        let Some(idx) = node_idx else { return; };
+        let Some(idx) = node_idx else {
+            return;
+        };
         let node = &self.nodes[idx];
         let p = points[node.point_idx];
 
-        let dist_sq = (p[0] - query[0]).powi(2) + (p[1] - query[1]).powi(2) + (p[2] - query[2]).powi(2);
+        let dist_sq =
+            (p[0] - query[0]).powi(2) + (p[1] - query[1]).powi(2) + (p[2] - query[2]).powi(2);
         if dist_sq < *best_dist_sq {
             *best_dist_sq = dist_sq;
             *best_idx = Some(node.point_idx);
@@ -251,7 +261,8 @@ impl CustomDelaunay3d {
                 let pc = self.get_coord(face_verts[2]);
                 let popp = self.get_coord(opp);
 
-                let val_opp = robust::orient3d(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(popp));
+                let val_opp =
+                    robust::orient3d(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(popp));
                 let val_p = robust::orient3d(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(p));
 
                 if val_p * val_opp < 0.0 {
@@ -280,7 +291,13 @@ impl CustomDelaunay3d {
         let pc = self.get_coord(v[2]);
         let pd = self.get_coord(v[3]);
 
-        robust::insphere(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(pd), to_coord(p)) > 0.0
+        robust::insphere(
+            to_coord(pa),
+            to_coord(pb),
+            to_coord(pc),
+            to_coord(pd),
+            to_coord(p),
+        ) > 0.0
     }
 
     /// Inserts a point into the 3D triangulation and returns its index.
@@ -420,14 +437,20 @@ impl CustomDelaunay3d {
 
             for face_sub_idx in 0..3 {
                 let edge = edges[face_sub_idx];
-                let sorted_edge = if edge.0 < edge.1 { (edge.0, edge.1) } else { (edge.1, edge.0) };
+                let sorted_edge = if edge.0 < edge.1 {
+                    (edge.0, edge.1)
+                } else {
+                    (edge.1, edge.0)
+                };
 
                 if let Some(&(other_tet_idx, other_face_idx)) = edge_to_face.get(&sorted_edge) {
                     new_tets[b_idx].neighbors[face_sub_idx] = Some(other_tet_idx);
                     if other_tet_idx < new_tets_start_idx {
-                        self.tetrahedra[other_tet_idx].neighbors[other_face_idx] = Some(new_tet_idx);
+                        self.tetrahedra[other_tet_idx].neighbors[other_face_idx] =
+                            Some(new_tet_idx);
                     } else {
-                        new_tets[other_tet_idx - new_tets_start_idx].neighbors[other_face_idx] = Some(new_tet_idx);
+                        new_tets[other_tet_idx - new_tets_start_idx].neighbors[other_face_idx] =
+                            Some(new_tet_idx);
                     }
                 } else {
                     edge_to_face.insert(sorted_edge, (new_tet_idx, face_sub_idx));
@@ -647,9 +670,12 @@ impl Delaunay3dKernel {
             }
             let v = tet.vertices;
             let tet_edges = [
-                (v[0], v[1]), (v[0], v[2]), (v[0], v[3]),
-                (v[1], v[2]), (v[1], v[3]),
-                (v[2], v[3])
+                (v[0], v[1]),
+                (v[0], v[2]),
+                (v[0], v[3]),
+                (v[1], v[2]),
+                (v[1], v[3]),
+                (v[2], v[3]),
             ];
             for &(a, b) in &tet_edges {
                 if a < self.triangulation.points.len() && b < self.triangulation.points.len() {
@@ -677,7 +703,7 @@ impl Delaunay3dKernel {
         let super_r = self.triangulation.super_r;
         let center = self.triangulation.center;
         let mut new_triangulation = CustomDelaunay3d::new(super_r, center);
-        
+
         new_triangulation.points = self.triangulation.points.clone();
         new_triangulation.vertex_to_tets = vec![Vec::new(); new_triangulation.points.len()];
 

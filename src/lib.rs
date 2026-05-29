@@ -40,7 +40,6 @@
 //! ```
 
 #![cfg_attr(feature = "simd", feature(portable_simd))]
-
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -770,18 +769,8 @@ pub(crate) fn squared_distance<const D: usize>(point: &[f64; D], query: &[f64; D
     let mut i = 0;
 
     while i + 4 <= D {
-        let pv = f64x4::from_array([
-            point[i],
-            point[i + 1],
-            point[i + 2],
-            point[i + 3],
-        ]);
-        let qv = f64x4::from_array([
-            query[i],
-            query[i + 1],
-            query[i + 2],
-            query[i + 3],
-        ]);
+        let pv = f64x4::from_array([point[i], point[i + 1], point[i + 2], point[i + 3]]);
+        let qv = f64x4::from_array([query[i], query[i + 1], query[i + 2], query[i + 3]]);
         let diff = pv - qv;
         sum += (diff * diff).reduce_sum();
         i += 4;
