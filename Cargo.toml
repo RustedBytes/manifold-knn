@@ -1,10 +1,12 @@
 [package]
 name = "manifold-knn"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.95"
+authors = ["Yehor Smoliakov <egorsmkv@gmail.com>"]
 description = "Dynamic-programming k-nearest-neighbor queries over birth-ordered point clouds, with optional 3D Delaunay construction."
 readme = "README.md"
+repository = "https://github.com/RustedBytes/manifold-knn"
 license = "MIT"
 keywords = ["knn", "nearest-neighbor", "point-cloud", "geometry", "manifold"]
 categories = ["algorithms", "science"]
