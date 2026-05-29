@@ -23,8 +23,8 @@ parallel = ["dep:rayon"]
 simd = []
 
 [dependencies]
-robust = { version = "1.1.0", optional = true }
-rayon = { version = "1.10", optional = true }
+robust = { version = "1.2.0", optional = true }
+rayon = { version = "1.12", optional = true }
 
 [package.metadata.docs.rs]
 features = ["delaunay-3d", "parallel"]
