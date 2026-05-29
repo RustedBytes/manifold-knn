@@ -32,14 +32,14 @@ Default build:
 
 ```toml
 [dependencies]
-manifold-knn = { path = "manifold-knn-rs" }
+manifold-knn = { version = "0.6.1" }
 ```
 
 3D Delaunay backend:
 
 ```toml
 [dependencies]
-manifold-knn = { path = "manifold-knn-rs", features = ["delaunay-3d"] }
+manifold-knn = { version = "0.6.1", features = ["delaunay-3d"] }
 ```
 
 The optional backend currently pins `delaunay = "=0.7.8"`. That crate declares Rust 1.95, so this package also declares Rust 1.95.
