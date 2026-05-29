@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2
+
+- Add SIMD optimizations
+
+## 0.6.1
+
+- Fixes
+
 ## 0.6.0
 
 - Optimized query execution path by avoiding $O(N)$ linear scans over active point status and $O(N)$ workspace processed resets per query.
