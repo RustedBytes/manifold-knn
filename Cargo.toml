@@ -1,0 +1,25 @@
+[package]
+name = "manifold-knn"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Dynamic-programming k-nearest-neighbor queries over birth-ordered point clouds, with optional 3D Delaunay construction."
+readme = "README.md"
+license = "MIT"
+keywords = ["knn", "nearest-neighbor", "point-cloud", "geometry", "manifold"]
+categories = ["algorithms", "science"]
+exclude = [".github/"]
+
+[lib]
+name = "manifold_knn"
+path = "src/lib.rs"
+
+[features]
+default = []
+delaunay-3d = ["dep:delaunay"]
+
+[dependencies]
+delaunay = { version = "=0.7.8", optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
