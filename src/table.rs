@@ -89,18 +89,21 @@ impl SuccessorTable {
 
     /// Returns the number of successor lists.
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.lists.len()
     }
 
     /// Returns `true` when there are no successor lists.
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.lists.is_empty()
     }
 
     /// Returns all successor lists.
     #[must_use]
+    #[inline]
     pub fn lists(&self) -> &[Vec<usize>] {
         &self.lists
     }
@@ -111,6 +114,7 @@ impl SuccessorTable {
     ///
     /// Panics if `owner >= self.len()`.
     #[must_use]
+    #[inline]
     pub fn list(&self, owner: usize) -> &[usize] {
         &self.lists[owner]
     }
@@ -121,6 +125,7 @@ impl SuccessorTable {
     ///
     /// Panics if `owner >= self.len()`.
     #[must_use]
+    #[inline]
     pub fn list_mut(&mut self, owner: usize) -> &mut Vec<usize> {
         &mut self.lists[owner]
     }

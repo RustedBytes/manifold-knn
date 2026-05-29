@@ -162,29 +162,34 @@ impl<const D: usize> ManifoldKnn<D> {
 
     /// Number of stored points, including inactive points left by deletion APIs.
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.points.len()
     }
 
     /// Returns `true` if the index contains no stored points.
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
 
     /// Number of active points.
     #[must_use]
+    #[inline]
     pub fn active_len(&self) -> usize {
         self.active.iter().filter(|&&is_active| is_active).count()
     }
 
     /// Returns whether the point at `index` is active.
     #[must_use]
+    #[inline]
     pub fn is_active(&self, index: usize) -> bool {
         self.active.get(index).copied().unwrap_or(false)
     }
 
     /// Iterator over active point indices in birth order.
+    #[inline]
     pub fn active_indices(&self) -> impl Iterator<Item = usize> + '_ {
         self.active
             .iter()
@@ -240,7 +245,20 @@ impl<const D: usize> ManifoldKnn<D> {
 
     /// Returns the nearest active point in the full index.
     pub fn nearest(&self, query: &[f64; D]) -> Result<Option<Neighbor>, Error> {
-        Ok(self.knn(query, 1)?.into_iter().next())
+        WORKSPACE.with(|ws| {
+            let mut workspace = ws.borrow_mut();
+            self.nearest_with_workspace(query, &mut workspace)
+        })
+    }
+
+    /// Returns the nearest active point in the full index using a workspace to avoid allocations.
+    pub fn nearest_with_workspace(
+        &self,
+        query: &[f64; D],
+        workspace: &mut QueryWorkspace,
+    ) -> Result<Option<Neighbor>, Error> {
+        let slice = self.knn_prefix_with_workspace(query, 1, self.points.len(), workspace)?;
+        Ok(slice.first().copied())
     }
 
     /// Returns up to `k` nearest active points in the full index.
@@ -249,6 +267,16 @@ impl<const D: usize> ManifoldKnn<D> {
     /// tie-breaker.
     pub fn knn(&self, query: &[f64; D], k: usize) -> Result<Vec<Neighbor>, Error> {
         self.knn_prefix(query, k, self.points.len())
+    }
+
+    /// Returns up to `k` nearest active points in the full index using a workspace.
+    pub fn knn_with_workspace<'a>(
+        &self,
+        query: &[f64; D],
+        k: usize,
+        workspace: &'a mut QueryWorkspace,
+    ) -> Result<&'a [Neighbor], Error> {
+        self.knn_prefix_with_workspace(query, k, self.points.len(), workspace)
     }
 
     /// Returns up to `k` nearest active points whose birth index is `< prefix_len`.
@@ -261,30 +289,54 @@ impl<const D: usize> ManifoldKnn<D> {
         k: usize,
         prefix_len: usize,
     ) -> Result<Vec<Neighbor>, Error> {
+        WORKSPACE.with(|ws| {
+            let mut workspace = ws.borrow_mut();
+            let slice = self.knn_prefix_with_workspace(query, k, prefix_len, &mut workspace)?;
+            Ok(slice.to_vec())
+        })
+    }
+
+    /// Returns up to `k` nearest active points whose birth index is `< prefix_len` using a workspace.
+    pub fn knn_prefix_with_workspace<'a>(
+        &self,
+        query: &[f64; D],
+        k: usize,
+        prefix_len: usize,
+        workspace: &'a mut QueryWorkspace,
+    ) -> Result<&'a [Neighbor], Error> {
         self.validate_query_and_prefix(query, prefix_len)?;
         if k == 0 {
-            return Ok(Vec::new());
+            workspace.candidates.reset(0);
+            return Ok(&[]);
         }
 
         let active_in_prefix = self.active_prefix_len(prefix_len);
         if active_in_prefix == 0 {
-            return Ok(Vec::new());
+            workspace.candidates.reset(0);
+            return Ok(&[]);
         }
 
         let capacity = k.min(active_in_prefix);
-        let mut candidates = self.transition_sites_internal(query, capacity, prefix_len)?;
-        let mut processed = vec![false; self.points.len()];
+        self.transition_sites_internal_with_workspace(query, capacity, prefix_len, workspace)?;
+
+        if workspace.processed.len() < self.points.len() {
+            workspace.processed.resize(self.points.len(), false);
+        } else {
+            workspace.processed[..self.points.len()].fill(false);
+        }
 
         loop {
-            let Some(index) = candidates
+            let Some(index) = workspace
+                .candidates
+                .as_slice()
                 .iter()
-                .find(|candidate| !processed[candidate.index])
+                .find(|candidate| !workspace.processed[candidate.index])
                 .map(|candidate| candidate.index)
             else {
                 break;
             };
 
-            processed[index] = true;
+            workspace.processed[index] = true;
             for &successor in self.successors.list(index) {
                 if successor >= prefix_len {
                     break;
@@ -292,14 +344,14 @@ impl<const D: usize> ManifoldKnn<D> {
                 if !self.active[successor] {
                     continue;
                 }
-                candidates.insert(Neighbor {
+                workspace.candidates.insert(Neighbor {
                     index: successor,
                     squared_distance: squared_distance(&self.points[successor], query),
                 });
             }
         }
 
-        Ok(candidates.into_vec())
+        Ok(workspace.candidates.as_slice())
     }
 
     /// Collects transition sites from the dynamic-programming 1-NN path.
@@ -315,6 +367,16 @@ impl<const D: usize> ManifoldKnn<D> {
         self.transition_sites_prefix(query, capacity, self.points.len())
     }
 
+    /// Collects transition sites using a workspace.
+    pub fn transition_sites_with_workspace<'a>(
+        &self,
+        query: &[f64; D],
+        capacity: usize,
+        workspace: &'a mut QueryWorkspace,
+    ) -> Result<&'a [Neighbor], Error> {
+        self.transition_sites_prefix_with_workspace(query, capacity, self.points.len(), workspace)
+    }
+
     /// Prefix-restricted variant of [`Self::transition_sites`].
     pub fn transition_sites_prefix(
         &self,
@@ -322,10 +384,29 @@ impl<const D: usize> ManifoldKnn<D> {
         capacity: usize,
         prefix_len: usize,
     ) -> Result<Vec<Neighbor>, Error> {
+        WORKSPACE.with(|ws| {
+            let mut workspace = ws.borrow_mut();
+            let slice = self.transition_sites_prefix_with_workspace(
+                query,
+                capacity,
+                prefix_len,
+                &mut workspace,
+            )?;
+            Ok(slice.to_vec())
+        })
+    }
+
+    /// Prefix-restricted variant of [`Self::transition_sites`] using a workspace.
+    pub fn transition_sites_prefix_with_workspace<'a>(
+        &self,
+        query: &[f64; D],
+        capacity: usize,
+        prefix_len: usize,
+        workspace: &'a mut QueryWorkspace,
+    ) -> Result<&'a [Neighbor], Error> {
         self.validate_query_and_prefix(query, prefix_len)?;
-        Ok(self
-            .transition_sites_internal(query, capacity, prefix_len)?
-            .into_vec())
+        self.transition_sites_internal_with_workspace(query, capacity, prefix_len, workspace)?;
+        Ok(workspace.candidates.as_slice())
     }
 
     /// Brute-force k-NN over the active full index.
@@ -443,22 +524,23 @@ impl<const D: usize> ManifoldKnn<D> {
         })
     }
 
-    fn transition_sites_internal(
+    fn transition_sites_internal_with_workspace(
         &self,
         query: &[f64; D],
         capacity: usize,
         prefix_len: usize,
-    ) -> Result<BoundedNeighbors, Error> {
-        let mut transitions = BoundedNeighbors::new(capacity);
+        workspace: &mut QueryWorkspace,
+    ) -> Result<(), Error> {
+        workspace.candidates.reset(capacity);
         if capacity == 0 {
-            return Ok(transitions);
+            return Ok(());
         }
 
         let Some(mut current) = self.first_active_before(prefix_len) else {
-            return Ok(transitions);
+            return Ok(());
         };
 
-        transitions.insert(Neighbor {
+        workspace.candidates.insert(Neighbor {
             index: current,
             squared_distance: squared_distance(&self.points[current], query),
         });
@@ -487,15 +569,16 @@ impl<const D: usize> ManifoldKnn<D> {
             };
 
             current = successor;
-            transitions.insert(Neighbor {
+            workspace.candidates.insert(Neighbor {
                 index: current,
                 squared_distance: successor_distance,
             });
         }
 
-        Ok(transitions)
+        Ok(())
     }
 
+    #[inline]
     fn validate_query_and_prefix(&self, query: &[f64; D], prefix_len: usize) -> Result<(), Error> {
         validate_query(query)?;
         if prefix_len > self.points.len() {
@@ -507,6 +590,7 @@ impl<const D: usize> ManifoldKnn<D> {
         Ok(())
     }
 
+    #[inline]
     fn active_prefix_len(&self, prefix_len: usize) -> usize {
         self.active[..prefix_len]
             .iter()
@@ -514,12 +598,14 @@ impl<const D: usize> ManifoldKnn<D> {
             .count()
     }
 
+    #[inline]
     fn first_active_before(&self, prefix_len: usize) -> Option<usize> {
         self.active[..prefix_len]
             .iter()
             .position(|&is_active| is_active)
     }
 
+    #[inline]
     fn ensure_active_index(&self, index: usize) -> Result<(), Error> {
         if index >= self.points.len() {
             return Err(Error::InvalidIndex {
@@ -533,6 +619,7 @@ impl<const D: usize> ManifoldKnn<D> {
         Ok(())
     }
 
+    #[inline]
     fn validate_new_successor_edge(
         &self,
         deleted: usize,
@@ -568,6 +655,30 @@ impl<const D: usize> ManifoldKnn<D> {
     }
 }
 
+/// Reusable query workspace to avoid allocations during nearest-neighbor queries.
+#[derive(Clone, Debug, Default)]
+pub struct QueryWorkspace {
+    processed: Vec<bool>,
+    candidates: BoundedNeighbors,
+}
+
+impl QueryWorkspace {
+    /// Creates a new empty query workspace.
+    #[must_use]
+    #[inline]
+    pub const fn new() -> Self {
+        Self {
+            processed: Vec::new(),
+            candidates: BoundedNeighbors::new_empty(),
+        }
+    }
+}
+
+thread_local! {
+    static WORKSPACE: std::cell::RefCell<QueryWorkspace> = const { std::cell::RefCell::new(QueryWorkspace::new()) };
+}
+
+#[inline]
 pub(crate) fn validate_points<const D: usize>(points: &[[f64; D]]) -> Result<(), Error> {
     for (index, point) in points.iter().enumerate() {
         validate_point(index, point)?;
@@ -575,6 +686,7 @@ pub(crate) fn validate_points<const D: usize>(points: &[[f64; D]]) -> Result<(),
     Ok(())
 }
 
+#[inline]
 pub(crate) fn validate_point<const D: usize>(index: usize, point: &[f64; D]) -> Result<(), Error> {
     for (coordinate, &value) in point.iter().enumerate() {
         if !value.is_finite() {
@@ -588,6 +700,7 @@ pub(crate) fn validate_point<const D: usize>(index: usize, point: &[f64; D]) -> 
     Ok(())
 }
 
+#[inline]
 pub(crate) fn validate_query<const D: usize>(query: &[f64; D]) -> Result<(), Error> {
     for (coordinate, &value) in query.iter().enumerate() {
         if !value.is_finite() {
@@ -597,17 +710,17 @@ pub(crate) fn validate_query<const D: usize>(query: &[f64; D]) -> Result<(), Err
     Ok(())
 }
 
+#[inline]
 pub(crate) fn squared_distance<const D: usize>(point: &[f64; D], query: &[f64; D]) -> f64 {
-    point
-        .iter()
-        .zip(query.iter())
-        .map(|(&a, &b)| {
-            let delta = a - b;
-            delta * delta
-        })
-        .sum()
+    let mut sum = 0.0;
+    for i in 0..D {
+        let delta = point[i] - query[i];
+        sum += delta * delta;
+    }
+    sum
 }
 
+#[inline]
 pub(crate) fn is_strictly_better(
     new_distance: f64,
     new_index: usize,

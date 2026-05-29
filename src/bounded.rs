@@ -2,6 +2,7 @@ use core::cmp::Ordering;
 
 use crate::Neighbor;
 
+#[inline]
 pub(crate) fn neighbor_cmp(left: &Neighbor, right: &Neighbor) -> Ordering {
     left.squared_distance
         .total_cmp(&right.squared_distance)
@@ -15,19 +16,28 @@ pub(crate) struct BoundedNeighbors {
 }
 
 impl BoundedNeighbors {
-    pub(crate) fn new(capacity: usize) -> Self {
+    #[inline]
+    pub(crate) const fn new_empty() -> Self {
         Self {
-            capacity,
-            items: Vec::with_capacity(capacity),
+            capacity: 0,
+            items: Vec::new(),
         }
     }
 
+    #[inline]
+    pub(crate) fn reset(&mut self, capacity: usize) {
+        self.capacity = capacity;
+        self.items.clear();
+    }
+
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[Neighbor] {
+        &self.items
+    }
+
+    #[inline]
     pub(crate) fn insert(&mut self, neighbor: Neighbor) -> bool {
         if self.capacity == 0 {
-            return false;
-        }
-
-        if self.items.iter().any(|item| item.index == neighbor.index) {
             return false;
         }
 
@@ -35,6 +45,10 @@ impl BoundedNeighbors {
             && let Some(worst) = self.items.last()
             && neighbor_cmp(worst, &neighbor) != Ordering::Greater
         {
+            return false;
+        }
+
+        if self.items.iter().any(|item| item.index == neighbor.index) {
             return false;
         }
 
@@ -49,13 +63,5 @@ impl BoundedNeighbors {
         }
 
         true
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Neighbor> {
-        self.items.iter()
-    }
-
-    pub(crate) fn into_vec(self) -> Vec<Neighbor> {
-        self.items
     }
 }

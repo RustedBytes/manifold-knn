@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Added `QueryWorkspace` struct for reusable buffers during nearest-neighbor queries.
+- Added workspace-based query methods (`knn_with_workspace`, `knn_prefix_with_workspace`, `nearest_with_workspace`, etc.) enabling 100% allocation-free queries.
+- Modified standard query methods (`knn`, `knn_prefix`, `nearest`, etc.) to reuse thread-local query workspaces, reducing internal allocations.
+- Optimized candidate filtering in BoundedNeighbors by checking against the worst neighbor before performing duplicate scans.
+- Added `#[inline]` annotations to hot functions like `squared_distance` and helper accessors.
+- Added a tracking allocator integration test to verify zero-allocation behavior.
+
 ## 0.3.0
 
 - Added optional `delaunay-3d` feature backed by `delaunay = "=0.7.8"`.

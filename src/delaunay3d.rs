@@ -93,30 +93,35 @@ impl Delaunay3dKernel {
 
     /// Number of points ever inserted, including inactive deleted points.
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.index_to_key.len()
     }
 
     /// Returns `true` if no points have been inserted.
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.index_to_key.is_empty()
     }
 
     /// Number of active points currently present in the triangulation.
     #[must_use]
+    #[inline]
     pub fn active_len(&self) -> usize {
         self.active.iter().filter(|&&is_active| is_active).count()
     }
 
     /// Returns whether the birth-order point index is active.
     #[must_use]
+    #[inline]
     pub fn is_active(&self, index: usize) -> bool {
         self.active.get(index).copied().unwrap_or(false)
     }
 
     /// Returns the Delaunay vertex key for an active point index.
     #[must_use]
+    #[inline]
     pub fn vertex_key(&self, index: usize) -> Option<VertexKey> {
         self.index_to_key.get(index).and_then(|&key| key)
     }
@@ -308,54 +313,63 @@ impl DelaunayManifoldKnn3 {
 
     /// Returns the Manifold k-NN query index.
     #[must_use]
+    #[inline]
     pub fn index(&self) -> &ManifoldKnn<3> {
         &self.index
     }
 
     /// Returns the Delaunay backend.
     #[must_use]
+    #[inline]
     pub fn kernel(&self) -> &Delaunay3dKernel {
         &self.kernel
     }
 
     /// Consumes the wrapper and returns the query index.
     #[must_use]
+    #[inline]
     pub fn into_index(self) -> ManifoldKnn<3> {
         self.index
     }
 
     /// Returns all points in birth order.
     #[must_use]
+    #[inline]
     pub fn points(&self) -> &[[f64; 3]] {
         self.index.points()
     }
 
     /// Returns the successor table.
     #[must_use]
+    #[inline]
     pub fn successors(&self) -> &SuccessorTable {
         self.index.successors()
     }
 
     /// Number of stored points, including inactive deleted points.
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.index.len()
     }
 
     /// Returns `true` if no points have been inserted.
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.index.is_empty()
     }
 
     /// Number of active points.
     #[must_use]
+    #[inline]
     pub fn active_len(&self) -> usize {
         self.index.active_len()
     }
 
     /// Returns whether `index` is active.
     #[must_use]
+    #[inline]
     pub fn is_active(&self, index: usize) -> bool {
         self.index.is_active(index)
     }
@@ -384,9 +398,28 @@ impl DelaunayManifoldKnn3 {
         self.index.nearest(query)
     }
 
+    /// Returns the nearest active point in the full index using a workspace to avoid allocations.
+    pub fn nearest_with_workspace(
+        &self,
+        query: &[f64; 3],
+        workspace: &mut crate::QueryWorkspace,
+    ) -> Result<Option<Neighbor>, Error> {
+        self.index.nearest_with_workspace(query, workspace)
+    }
+
     /// Returns up to `k` nearest active points in the full index.
     pub fn knn(&self, query: &[f64; 3], k: usize) -> Result<Vec<Neighbor>, Error> {
         self.index.knn(query, k)
+    }
+
+    /// Returns up to `k` nearest active points in the full index using a workspace.
+    pub fn knn_with_workspace<'a>(
+        &self,
+        query: &[f64; 3],
+        k: usize,
+        workspace: &'a mut crate::QueryWorkspace,
+    ) -> Result<&'a [Neighbor], Error> {
+        self.index.knn_with_workspace(query, k, workspace)
     }
 
     /// Returns up to `k` nearest active points whose birth index is `< prefix_len`.
@@ -397,6 +430,18 @@ impl DelaunayManifoldKnn3 {
         prefix_len: usize,
     ) -> Result<Vec<Neighbor>, Error> {
         self.index.knn_prefix(query, k, prefix_len)
+    }
+
+    /// Returns up to `k` nearest active points whose birth index is `< prefix_len` using a workspace.
+    pub fn knn_prefix_with_workspace<'a>(
+        &self,
+        query: &[f64; 3],
+        k: usize,
+        prefix_len: usize,
+        workspace: &'a mut crate::QueryWorkspace,
+    ) -> Result<&'a [Neighbor], Error> {
+        self.index
+            .knn_prefix_with_workspace(query, k, prefix_len, workspace)
     }
 }
 
