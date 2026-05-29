@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- Added optional `parallel` feature backed by `rayon = "1.10"` to speed up index building, sorting, and validation.
+- Added a Criterion benchmark suite to compare sequential and parallel index building performance.
+
 ## 0.4.0
 
 - Added `QueryWorkspace` struct for reusable buffers during nearest-neighbor queries.

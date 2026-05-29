@@ -1,6 +1,6 @@
 [package]
 name = "manifold-knn"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Dynamic-programming k-nearest-neighbor queries over birth-ordered point clouds, with optional 3D Delaunay construction."
@@ -17,9 +17,18 @@ path = "src/lib.rs"
 [features]
 default = []
 delaunay-3d = ["dep:delaunay"]
+parallel = ["dep:rayon"]
 
 [dependencies]
 delaunay = { version = "=0.7.8", optional = true }
+rayon = { version = "1.10", optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[bench]]
+name = "index_build"
+harness = false
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }

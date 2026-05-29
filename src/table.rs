@@ -31,9 +31,20 @@ impl SuccessorTable {
     ///
     /// Entries are sorted and deduplicated before validation.
     pub fn from_lists_normalized(mut lists: Vec<Vec<usize>>) -> Result<Self, Error> {
-        for list in &mut lists {
-            list.sort_unstable();
-            list.dedup();
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            lists.par_iter_mut().for_each(|list| {
+                list.sort_unstable();
+                list.dedup();
+            });
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for list in &mut lists {
+                list.sort_unstable();
+                list.dedup();
+            }
         }
         Self::try_from_lists(lists)
     }
@@ -45,15 +56,33 @@ impl SuccessorTable {
     /// it costs `O(n^2)` memory and query work in the worst case.
     #[must_use]
     pub fn complete(len: usize) -> Self {
-        let mut lists = Vec::with_capacity(len);
-        for owner in 0..len {
-            let mut list = Vec::with_capacity(len.saturating_sub(owner + 1));
-            for successor in (owner + 1)..len {
-                list.push(successor);
-            }
-            lists.push(list);
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            let lists = (0..len)
+                .into_par_iter()
+                .map(|owner| {
+                    let mut list = Vec::with_capacity(len.saturating_sub(owner + 1));
+                    for successor in (owner + 1)..len {
+                        list.push(successor);
+                    }
+                    list
+                })
+                .collect();
+            Self { lists }
         }
-        Self { lists }
+        #[cfg(not(feature = "parallel"))]
+        {
+            let mut lists = Vec::with_capacity(len);
+            for owner in 0..len {
+                let mut list = Vec::with_capacity(len.saturating_sub(owner + 1));
+                for successor in (owner + 1)..len {
+                    list.push(successor);
+                }
+                lists.push(list);
+            }
+            Self { lists }
+        }
     }
 
     /// Builds a successor table from insertion-time neighbor lists.
@@ -71,11 +100,26 @@ impl SuccessorTable {
             });
         }
 
+        #[cfg(feature = "parallel")]
+        let mut neighbors_at_insertion = neighbors_at_insertion;
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            neighbors_at_insertion.par_iter_mut().for_each(|neighbors| {
+                neighbors.sort_unstable();
+                neighbors.dedup();
+            });
+        }
+
         let mut table = Self::empty(len);
         for (inserted, neighbors) in neighbors_at_insertion.into_iter().enumerate() {
-            let mut neighbors = neighbors;
-            neighbors.sort_unstable();
-            neighbors.dedup();
+            #[cfg(not(feature = "parallel"))]
+            let neighbors = {
+                let mut neighbors = neighbors;
+                neighbors.sort_unstable();
+                neighbors.dedup();
+                neighbors
+            };
             for neighbor in neighbors {
                 if neighbor >= inserted {
                     return Err(Error::InvalidInsertionNeighbor { inserted, neighbor });
@@ -197,33 +241,70 @@ impl SuccessorTable {
             });
         }
 
-        for (owner, list) in self.lists.iter().enumerate() {
-            let mut previous = None;
-            for &successor in list {
-                if successor <= owner || successor >= len {
-                    return Err(Error::InvalidSuccessor {
-                        owner,
-                        successor,
-                        len,
-                    });
-                }
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            self.lists
+                .par_iter()
+                .enumerate()
+                .try_for_each(|(owner, list)| {
+                    let mut previous = None;
+                    for &successor in list {
+                        if successor <= owner || successor >= len {
+                            return Err(Error::InvalidSuccessor {
+                                owner,
+                                successor,
+                                len,
+                            });
+                        }
 
-                if let Some(previous) = previous {
-                    if successor == previous {
-                        return Err(Error::DuplicateSuccessor { owner, successor });
+                        if let Some(prev) = previous {
+                            if successor == prev {
+                                return Err(Error::DuplicateSuccessor { owner, successor });
+                            }
+                            if successor < prev {
+                                return Err(Error::UnsortedSuccessorList {
+                                    owner,
+                                    previous: prev,
+                                    current: successor,
+                                });
+                            }
+                        }
+                        previous = Some(successor);
                     }
-                    if successor < previous {
-                        return Err(Error::UnsortedSuccessorList {
+                    Ok(())
+                })
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for (owner, list) in self.lists.iter().enumerate() {
+                let mut previous = None;
+                for &successor in list {
+                    if successor <= owner || successor >= len {
+                        return Err(Error::InvalidSuccessor {
                             owner,
-                            previous,
-                            current: successor,
+                            successor,
+                            len,
                         });
                     }
+
+                    if let Some(prev) = previous {
+                        if successor == prev {
+                            return Err(Error::DuplicateSuccessor { owner, successor });
+                        }
+                        if successor < prev {
+                            return Err(Error::UnsortedSuccessorList {
+                                owner,
+                                previous: prev,
+                                current: successor,
+                            });
+                        }
+                    }
+                    previous = Some(successor);
                 }
-                previous = Some(successor);
             }
+            Ok(())
         }
-        Ok(())
     }
 
     fn validate_successor(&self, owner: usize, successor: usize) -> Result<(), Error> {

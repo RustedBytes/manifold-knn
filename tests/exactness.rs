@@ -132,3 +132,45 @@ fn invalid_successor_tables_are_rejected() {
         SuccessorTable::from_lists_normalized(vec![vec![2, 1, 2], vec![2], vec![]]).unwrap();
     assert_eq!(normalized.list(0), &[1, 2]);
 }
+
+#[test]
+#[cfg(feature = "parallel")]
+fn parallel_features_produce_identical_results() {
+    let points = pseudo_random_points(100);
+
+    // Build index with parallel feature
+    let index = ManifoldKnn::<3>::from_complete_successors(points.clone()).unwrap();
+
+    // Manually build sequential expected table
+    let mut expected_lists = Vec::with_capacity(points.len());
+    for owner in 0..points.len() {
+        let mut list = Vec::with_capacity(points.len().saturating_sub(owner + 1));
+        for successor in (owner + 1)..points.len() {
+            list.push(successor);
+        }
+        expected_lists.push(list);
+    }
+    let table_seq = SuccessorTable::try_from_lists(expected_lists).unwrap();
+    assert_eq!(index.successors(), &table_seq);
+
+    // Verify index queries yield same results
+    for query in pseudo_random_queries(10) {
+        let results = index.knn(&query, 5).unwrap();
+        let brute = index.brute_force_knn(&query, 5).unwrap();
+        assert_eq!(results, brute);
+    }
+}
+
+#[test]
+#[cfg(feature = "parallel")]
+fn parallel_insertion_neighbors_produce_identical_results() {
+    let points = pseudo_random_points(50);
+    let neighbors_at_insertion: Vec<Vec<usize>> =
+        (0..points.len()).map(|j| (0..j).collect()).collect();
+
+    let index_parallel =
+        ManifoldKnn::<3>::from_insertion_neighbors(points.clone(), neighbors_at_insertion.clone())
+            .unwrap();
+
+    assert_eq!(index_parallel.successors(), &SuccessorTable::complete(50));
+}

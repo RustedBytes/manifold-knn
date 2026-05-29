@@ -680,10 +680,21 @@ thread_local! {
 
 #[inline]
 pub(crate) fn validate_points<const D: usize>(points: &[[f64; D]]) -> Result<(), Error> {
-    for (index, point) in points.iter().enumerate() {
-        validate_point(index, point)?;
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        points
+            .par_iter()
+            .enumerate()
+            .try_for_each(|(index, point)| validate_point(index, point))
     }
-    Ok(())
+    #[cfg(not(feature = "parallel"))]
+    {
+        for (index, point) in points.iter().enumerate() {
+            validate_point(index, point)?;
+        }
+        Ok(())
+    }
 }
 
 #[inline]

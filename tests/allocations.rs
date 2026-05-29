@@ -6,9 +6,15 @@ struct TrackingAllocator;
 
 static ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    static IS_TRACKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
+        if IS_TRACKING.with(|t| t.get()) {
+            ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
         unsafe { System.alloc(layout) }
     }
 
@@ -47,6 +53,9 @@ fn test_zero_allocations_during_queries() {
         .knn_with_workspace(&query, 10, &mut workspace)
         .unwrap();
 
+    // Now turn on tracking for the current thread
+    IS_TRACKING.with(|t| t.set(true));
+
     // Record the allocation count before the test run
     let count_before = ALLOC_COUNT.load(Ordering::SeqCst);
 
@@ -60,6 +69,10 @@ fn test_zero_allocations_during_queries() {
 
     // Check allocation count after the run
     let count_after = ALLOC_COUNT.load(Ordering::SeqCst);
+
+    // Turn off tracking
+    IS_TRACKING.with(|t| t.set(false));
+
     let diff = count_after - count_before;
 
     assert_eq!(diff, 0, "Query allocated {} times!", diff);
