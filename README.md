@@ -1,5 +1,7 @@
 # manifold-knn
 
+[![Crates.io Version](https://img.shields.io/crates/v/manifold-knn)](https://crates.io/crates/manifold-knn)
+
 `manifold-knn` is a Rust implementation of the dynamic-programming k-nearest-neighbor query method from:
 
 > Pengfei Wang, Qinghao Guo, Haisen Zhao, Shiqing Xin, Shuangmin Chen, Changhe Tu, Wenping Wang. **Manifold k-NN: Accelerated k-NN Queries for Manifold Point Clouds**. arXiv:2605.02224v1, 2026.
