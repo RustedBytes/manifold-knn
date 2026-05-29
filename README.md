@@ -4,7 +4,7 @@
 
 `manifold-knn` is a Rust implementation of the dynamic-programming k-nearest-neighbor query method from:
 
-> Pengfei Wang, Qinghao Guo, Haisen Zhao, Shiqing Xin, Shuangmin Chen, Changhe Tu, Wenping Wang. **Manifold k-NN: Accelerated k-NN Queries for Manifold Point Clouds**. arXiv:2605.02224v1, 2026.
+> Pengfei Wang, Qinghao Guo, Haisen Zhao, Shiqing Xin, Shuangmin Chen, Changhe Tu, Wenping Wang. **Manifold k-NN: Accelerated k-NN Queries for Manifold Point Clouds**. arXiv:[2605.02224v1](https://arxiv.org/html/2605.02224v1), 2026.
 
 The crate keeps the query/data-structure layer small and explicit, and now includes an optional 3D Delaunay backend powered by [`acgetchell/delaunay`](https://github.com/acgetchell/delaunay).
 
