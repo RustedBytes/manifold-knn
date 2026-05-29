@@ -1,6 +1,6 @@
 [package]
 name = "manifold-knn"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Yehor Smoliakov <egorsmkv@gmail.com>"]

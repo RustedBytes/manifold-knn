@@ -1,7 +1,7 @@
 //! 3D Delaunay integration backed by a custom optimized triangulation.
 //!
 //! Enable this module with the `delaunay-3d` Cargo feature. It builds the
-//! successor table required by [`ManifoldKnn`](crate::ManifoldKnn) by inserting
+//! successor table required by [`ManifoldKnn`] by inserting
 //! points into an incremental 3D Delaunay triangulation and recording the earlier
 //! Delaunay neighbors of each inserted vertex.
 
@@ -29,121 +29,105 @@ impl Tetrahedron {
     }
 }
 
-/// KD-tree node for fast nearest neighbor point location.
-#[derive(Clone, Copy, Debug)]
-pub struct KdNode {
-    /// The point index in the triangulation.
-    pub point_idx: usize,
-    /// Left child index.
-    pub left: Option<usize>,
-    /// Right child index.
-    pub right: Option<usize>,
-}
-
-/// Incremental 3D KD-tree.
-#[derive(Clone, Debug, Default)]
-pub struct KdTree {
-    /// The nodes in the KD-tree.
-    pub nodes: Vec<KdNode>,
-    /// The root node index, if any.
-    pub root: Option<usize>,
-}
-
-impl KdTree {
-    /// Inserts a point into the KD-tree.
-    pub fn insert(&mut self, points: &[[f64; 3]], point_idx: usize) {
-        let new_node_idx = self.nodes.len();
-        self.nodes.push(KdNode {
-            point_idx,
-            left: None,
-            right: None,
-        });
-
-        if self.root.is_none() {
-            self.root = Some(new_node_idx);
-            return;
+/// Computes a 3D Z-order (Morton) key for a point.
+///
+/// Coordinates are quantized to 21 bits per dimension to fit a 63-bit key.
+pub fn z_order_key(p: [f64; 3], min_val: [f64; 3], max_val: [f64; 3]) -> u64 {
+    let quantize = |val: f64, min: f64, max: f64| -> u32 {
+        let span = max - min;
+        if span <= 1e-9 {
+            return 0;
         }
+        let norm = ((val - min) / span).clamp(0.0, 1.0);
+        (norm * ((1 << 21) - 1) as f64) as u32
+    };
 
-        let mut curr = self.root.unwrap();
-        let mut depth = 0;
-        let p = points[point_idx];
+    let x = quantize(p[0], min_val[0], max_val[0]);
+    let y = quantize(p[1], min_val[1], max_val[1]);
+    let z = quantize(p[2], min_val[2], max_val[2]);
 
-        loop {
-            let axis = depth % 3;
-            // Use index to avoid borrow checker issues with mutability
-            let node_p = points[self.nodes[curr].point_idx];
+    let mut key = 0u64;
+    for i in 0..21 {
+        key |= (((x >> i) & 1) as u64) << (3 * i);
+        key |= (((y >> i) & 1) as u64) << (3 * i + 1);
+        key |= (((z >> i) & 1) as u64) << (3 * i + 2);
+    }
+    key
+}
 
-            if p[axis] < node_p[axis] {
-                if let Some(left) = self.nodes[curr].left {
-                    curr = left;
-                } else {
-                    self.nodes[curr].left = Some(new_node_idx);
-                    break;
-                }
-            } else {
-                if let Some(right) = self.nodes[curr].right {
-                    curr = right;
-                } else {
-                    self.nodes[curr].right = Some(new_node_idx);
-                    break;
-                }
+/// Sorts a slice of points in-place using a Biased Randomized Incremental Order (BRIO)
+/// with Z-order (Morton) keys applied within each bucket.
+///
+/// Returns the permutation mapping: `permutation[orig_idx] = new_idx`.
+pub fn sort_brio_spatial(points: &mut [[f64; 3]]) -> Vec<usize> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+
+    // 1. Compute bounding box
+    let mut min_val = points[0];
+    let mut max_val = points[0];
+    for &p in points.iter() {
+        for d in 0..3 {
+            min_val[d] = min_val[d].min(p[d]);
+            max_val[d] = max_val[d].max(p[d]);
+        }
+    }
+
+    // 2. Assign level/bucket and compute Z-order key
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next_random = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mantissa = state >> 12;
+        (mantissa as f64) / ((1_u64 << 52) as f64)
+    };
+
+    struct PointInfo {
+        orig_idx: usize,
+        level: usize,
+        spatial_key: u64,
+    }
+
+    let mut infos: Vec<PointInfo> = points
+        .iter()
+        .enumerate()
+        .map(|(idx, &p)| {
+            let u = next_random().max(1e-15);
+            let mut level = (-u.log2()).floor() as usize;
+            if level > 12 {
+                level = 12;
             }
-            depth += 1;
-        }
-    }
 
-    /// Finds the nearest neighbor to `query` point in the KD-tree.
-    pub fn find_nearest(&self, points: &[[f64; 3]], query: [f64; 3]) -> Option<usize> {
-        let mut best_idx = None;
-        let mut best_dist_sq = f64::INFINITY;
-        self.nearest_recurse(
-            self.root,
-            0,
-            points,
-            query,
-            &mut best_idx,
-            &mut best_dist_sq,
-        );
-        best_idx
-    }
+            let key = z_order_key(p, min_val, max_val);
 
-    fn nearest_recurse(
-        &self,
-        node_idx: Option<usize>,
-        depth: usize,
-        points: &[[f64; 3]],
-        query: [f64; 3],
-        best_idx: &mut Option<usize>,
-        best_dist_sq: &mut f64,
-    ) {
-        let Some(idx) = node_idx else {
-            return;
-        };
-        let node = &self.nodes[idx];
-        let p = points[node.point_idx];
+            PointInfo {
+                orig_idx: idx,
+                level,
+                spatial_key: key,
+            }
+        })
+        .collect();
 
-        let dist_sq =
-            (p[0] - query[0]).powi(2) + (p[1] - query[1]).powi(2) + (p[2] - query[2]).powi(2);
-        if dist_sq < *best_dist_sq {
-            *best_dist_sq = dist_sq;
-            *best_idx = Some(node.point_idx);
-        }
-
-        let axis = depth % 3;
-        let diff = query[axis] - p[axis];
-
-        let (first, second) = if diff < 0.0 {
-            (node.left, node.right)
+    // 3. Sort by level descending (highest level first), then by spatial key
+    infos.sort_unstable_by(|a, b| {
+        let cmp = b.level.cmp(&a.level);
+        if cmp == std::cmp::Ordering::Equal {
+            a.spatial_key.cmp(&b.spatial_key)
         } else {
-            (node.right, node.left)
-        };
-
-        self.nearest_recurse(first, depth + 1, points, query, best_idx, best_dist_sq);
-
-        if diff.powi(2) < *best_dist_sq {
-            self.nearest_recurse(second, depth + 1, points, query, best_idx, best_dist_sq);
+            cmp
         }
+    });
+
+    // 4. Rearrange points
+    let reordered: Vec<[f64; 3]> = infos.iter().map(|info| points[info.orig_idx]).collect();
+    points.copy_from_slice(&reordered);
+
+    // 5. Build permutation map: new_idx = permutation[orig_idx]
+    let mut permutation = vec![0; points.len()];
+    for (new_idx, info) in infos.iter().enumerate() {
+        permutation[info.orig_idx] = new_idx;
     }
+    permutation
 }
 
 /// Custom 3D Delaunay triangulation backend using Shewchuk's robust predicates.
@@ -157,14 +141,18 @@ pub struct CustomDelaunay3d {
     pub tetrahedra: Vec<Tetrahedron>,
     /// Mapping from vertex index to list of active tetrahedra containing it.
     pub vertex_to_tets: Vec<Vec<usize>>,
-    /// KD-tree for fast nearest vertex location.
-    pub kd_tree: KdTree,
+    /// Index of the last inserted active tetrahedron (for starting visibility walk).
+    pub last_tet: usize,
     /// Number of points inserted into the triangulation.
     pub num_points: usize,
     /// Radius of the super-tetrahedron.
     pub super_r: f64,
     /// Center of the super-tetrahedron.
     pub center: [f64; 3],
+    /// Reusable visited buffer to avoid allocations during cavity searches.
+    visited: Vec<u32>,
+    /// Generation identifier for the visited buffer.
+    current_visit_id: u32,
 }
 
 #[inline]
@@ -217,10 +205,12 @@ impl CustomDelaunay3d {
             super_points,
             tetrahedra: tets,
             vertex_to_tets: Vec::new(),
-            kd_tree: KdTree::default(),
+            last_tet: 0,
             num_points: 0,
             super_r,
             center,
+            visited: vec![0; 1],
+            current_visit_id: 1,
         }
     }
 
@@ -240,8 +230,12 @@ impl CustomDelaunay3d {
 
     fn locate_cell(&self, start_tet: usize, p: [f64; 3]) -> usize {
         let mut curr = start_tet;
-        let mut visited = HashSet::new();
-        visited.insert(curr);
+
+        // Fast path: stack-allocated visited list to avoid heap allocations
+        let mut visited_stack = [usize::MAX; 16];
+        visited_stack[0] = curr;
+        let mut visited_count = 1;
+        let mut fallback_set: Option<HashSet<usize>> = None;
 
         loop {
             let tet = &self.tetrahedra[curr];
@@ -261,14 +255,31 @@ impl CustomDelaunay3d {
                 let pc = self.get_coord(face_verts[2]);
                 let popp = self.get_coord(opp);
 
-                let val_opp =
-                    robust::orient3d(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(popp));
+                let val_opp = robust::orient3d(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(popp));
                 let val_p = robust::orient3d(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(p));
 
                 if val_p * val_opp < 0.0 {
                     if let Some(next_tet) = tet.neighbors[face_idx] {
-                        if !visited.contains(&next_tet) {
-                            visited.insert(next_tet);
+                        let already_visited = if let Some(ref set) = fallback_set {
+                            set.contains(&next_tet)
+                        } else {
+                            visited_stack[..visited_count].contains(&next_tet)
+                        };
+
+                        if !already_visited {
+                            if let Some(ref mut set) = fallback_set {
+                                set.insert(next_tet);
+                            } else if visited_count < 16 {
+                                visited_stack[visited_count] = next_tet;
+                                visited_count += 1;
+                            } else {
+                                let mut set = HashSet::with_capacity(32);
+                                for &t in &visited_stack[..visited_count] {
+                                    set.insert(t);
+                                }
+                                set.insert(next_tet);
+                                fallback_set = Some(set);
+                            }
                             curr = next_tet;
                             walked = true;
                             break;
@@ -291,13 +302,7 @@ impl CustomDelaunay3d {
         let pc = self.get_coord(v[2]);
         let pd = self.get_coord(v[3]);
 
-        robust::insphere(
-            to_coord(pa),
-            to_coord(pb),
-            to_coord(pc),
-            to_coord(pd),
-            to_coord(p),
-        ) > 0.0
+        robust::insphere(to_coord(pa), to_coord(pb), to_coord(pc), to_coord(pd), to_coord(p)) > 0.0
     }
 
     /// Inserts a point into the 3D triangulation and returns its index.
@@ -306,41 +311,35 @@ impl CustomDelaunay3d {
         self.points.push(p);
         self.vertex_to_tets.push(Vec::new());
 
-        // Check if there is an identical/coincident point already inserted
-        if let Some(nearest_v) = self.kd_tree.find_nearest(&self.points[..p_idx], p) {
-            let np = self.points[nearest_v];
-            let dist_sq = (np[0] - p[0]).powi(2) + (np[1] - p[1]).powi(2) + (np[2] - p[2]).powi(2);
-            if dist_sq < 1e-16 {
-                // Duplicate point. Map it but do not insert into the geometry.
-                self.num_points += 1;
-                return p_idx;
+        let t_containing = self.locate_cell(self.last_tet, p);
+        for &v_idx in &self.tetrahedra[t_containing].vertices {
+            if v_idx < usize::MAX - 3 {
+                let np = self.points[v_idx];
+                let dist_sq = (np[0] - p[0]).powi(2) + (np[1] - p[1]).powi(2) + (np[2] - p[2]).powi(2);
+                if dist_sq < 1e-16 {
+                    self.num_points += 1;
+                    return p_idx;
+                }
             }
         }
 
-        self.insert_at(p_idx, p);
+        self.insert_at(p_idx, p, t_containing);
         p_idx
     }
 
-    fn insert_at(&mut self, p_idx: usize, p: [f64; 3]) {
-        let t_start = if let Some(nearest_v) = self.kd_tree.find_nearest(&self.points[..p_idx], p) {
-            let mut found = None;
-            for &t_idx in &self.vertex_to_tets[nearest_v] {
-                if !self.tetrahedra[t_idx].is_deleted() {
-                    found = Some(t_idx);
-                    break;
-                }
-            }
-            found.unwrap_or(0)
-        } else {
-            0
-        };
-
-        let t_containing = self.locate_cell(t_start, p);
+    fn insert_at(&mut self, p_idx: usize, p: [f64; 3], t_containing: usize) {
+        // Increment visit generation by 2.
+        // self.current_visit_id represents "visited/queued in BFS cavity search".
+        // self.current_visit_id + 1 represents "confirmed inside the cavity".
+        self.current_visit_id += 2;
+        if self.current_visit_id >= u32::MAX - 2 {
+            self.visited.fill(0);
+            self.current_visit_id = 1;
+        }
 
         let mut cavity = Vec::new();
-        let mut visited = vec![false; self.tetrahedra.len()];
         let mut queue = vec![t_containing];
-        visited[t_containing] = true;
+        self.visited[t_containing] = self.current_visit_id;
 
         let mut q_head = 0;
         while q_head < queue.len() {
@@ -349,10 +348,11 @@ impl CustomDelaunay3d {
 
             if self.in_circumsphere(t_idx, p) {
                 cavity.push(t_idx);
+                self.visited[t_idx] = self.current_visit_id + 1; // Mark as inside cavity
                 for &neighbor in &self.tetrahedra[t_idx].neighbors {
                     if let Some(n_idx) = neighbor {
-                        if !visited[n_idx] {
-                            visited[n_idx] = true;
+                        if self.visited[n_idx] < self.current_visit_id {
+                            self.visited[n_idx] = self.current_visit_id;
                             queue.push(n_idx);
                         }
                     }
@@ -361,18 +361,13 @@ impl CustomDelaunay3d {
         }
 
         let mut boundary = Vec::new();
-        let mut cavity_set = vec![false; self.tetrahedra.len()];
-        for &t_idx in &cavity {
-            cavity_set[t_idx] = true;
-        }
-
         for &t_idx in &cavity {
             let tet = &self.tetrahedra[t_idx];
             for face_idx in 0..4 {
                 let neighbor = tet.neighbors[face_idx];
                 let is_boundary = match neighbor {
                     None => true,
-                    Some(n_idx) => !cavity_set[n_idx],
+                    Some(n_idx) => self.visited[n_idx] != self.current_visit_id + 1,
                 };
                 if is_boundary {
                     boundary.push((t_idx, face_idx));
@@ -382,7 +377,7 @@ impl CustomDelaunay3d {
 
         let new_tets_start_idx = self.tetrahedra.len();
         let mut new_tets = Vec::with_capacity(boundary.len());
-        let mut edge_to_face = HashMap::new();
+        let mut edge_to_face = HashMap::with_capacity(boundary.len() * 2);
 
         for (b_idx, &(t_idx, face_idx)) in boundary.iter().enumerate() {
             let tet = &self.tetrahedra[t_idx];
@@ -437,20 +432,14 @@ impl CustomDelaunay3d {
 
             for face_sub_idx in 0..3 {
                 let edge = edges[face_sub_idx];
-                let sorted_edge = if edge.0 < edge.1 {
-                    (edge.0, edge.1)
-                } else {
-                    (edge.1, edge.0)
-                };
+                let sorted_edge = if edge.0 < edge.1 { (edge.0, edge.1) } else { (edge.1, edge.0) };
 
                 if let Some(&(other_tet_idx, other_face_idx)) = edge_to_face.get(&sorted_edge) {
                     new_tets[b_idx].neighbors[face_sub_idx] = Some(other_tet_idx);
                     if other_tet_idx < new_tets_start_idx {
-                        self.tetrahedra[other_tet_idx].neighbors[other_face_idx] =
-                            Some(new_tet_idx);
+                        self.tetrahedra[other_tet_idx].neighbors[other_face_idx] = Some(new_tet_idx);
                     } else {
-                        new_tets[other_tet_idx - new_tets_start_idx].neighbors[other_face_idx] =
-                            Some(new_tet_idx);
+                        new_tets[other_tet_idx - new_tets_start_idx].neighbors[other_face_idx] = Some(new_tet_idx);
                     }
                 } else {
                     edge_to_face.insert(sorted_edge, (new_tet_idx, face_sub_idx));
@@ -471,9 +460,10 @@ impl CustomDelaunay3d {
                 }
             }
             self.tetrahedra.push(new_tet);
+            self.visited.push(0);
         }
 
-        self.kd_tree.insert(&self.points, p_idx);
+        self.last_tet = new_tets_start_idx;
         self.num_points += 1;
     }
 
@@ -670,12 +660,9 @@ impl Delaunay3dKernel {
             }
             let v = tet.vertices;
             let tet_edges = [
-                (v[0], v[1]),
-                (v[0], v[2]),
-                (v[0], v[3]),
-                (v[1], v[2]),
-                (v[1], v[3]),
-                (v[2], v[3]),
+                (v[0], v[1]), (v[0], v[2]), (v[0], v[3]),
+                (v[1], v[2]), (v[1], v[3]),
+                (v[2], v[3])
             ];
             for &(a, b) in &tet_edges {
                 if a < self.triangulation.points.len() && b < self.triangulation.points.len() {
@@ -703,14 +690,15 @@ impl Delaunay3dKernel {
         let super_r = self.triangulation.super_r;
         let center = self.triangulation.center;
         let mut new_triangulation = CustomDelaunay3d::new(super_r, center);
-
+        
         new_triangulation.points = self.triangulation.points.clone();
         new_triangulation.vertex_to_tets = vec![Vec::new(); new_triangulation.points.len()];
 
         for i in 0..new_triangulation.points.len() {
             if self.is_active(i) {
                 let p = new_triangulation.points[i];
-                new_triangulation.insert_at(i, p);
+                let t_containing = new_triangulation.locate_cell(new_triangulation.last_tet, p);
+                new_triangulation.insert_at(i, p, t_containing);
             }
         }
 
@@ -775,7 +763,8 @@ impl DelaunayManifoldKnn3 {
     }
 
     /// Builds a synchronized index from 3D points in birth order.
-    pub fn from_points(points: Vec<[f64; 3]>) -> Result<Self, Error> {
+    pub fn from_points(mut points: Vec<[f64; 3]>) -> Result<Self, Error> {
+        sort_brio_spatial(&mut points);
         let (kernel, neighbors_at_insertion) = Delaunay3dKernel::from_points(&points)?;
         let index = ManifoldKnn::from_insertion_neighbors(points, neighbors_at_insertion)?;
         Ok(Self { index, kernel })
@@ -920,7 +909,8 @@ impl SuccessorTable {
 
 impl ManifoldKnn<3> {
     /// Builds a 3D Manifold k-NN index directly from Delaunay insertion neighbors.
-    pub fn from_delaunay(points: Vec<[f64; 3]>) -> Result<Self, Error> {
+    pub fn from_delaunay(mut points: Vec<[f64; 3]>) -> Result<Self, Error> {
+        sort_brio_spatial(&mut points);
         let (_, neighbors_at_insertion) = Delaunay3dKernel::from_points(&points)?;
         Self::from_insertion_neighbors(points, neighbors_at_insertion)
     }

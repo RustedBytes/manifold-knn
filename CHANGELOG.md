@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- Implemented a walk-based point location algorithm starting from the last inserted tetrahedron, combined with Biased Randomized Incremental Ordering (BRIO) and spatial Z-order sorting to achieve average-case $O(1)$ point location complexity without needing any KD-Tree.
+
 ## 0.7.0
 
 - Replaced external generic `delaunay` crate dependency with a custom, highly optimized 3D Delaunay triangulation.
