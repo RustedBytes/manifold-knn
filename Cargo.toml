@@ -1,6 +1,6 @@
 [package]
 name = "manifold-knn"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Yehor Smoliakov <egorsmkv@gmail.com>"]
@@ -18,12 +18,12 @@ path = "src/lib.rs"
 
 [features]
 default = []
-delaunay-3d = ["dep:delaunay"]
+delaunay-3d = ["dep:robust"]
 parallel = ["dep:rayon"]
 simd = []
 
 [dependencies]
-delaunay = { version = "=0.7.8", optional = true }
+robust = { version = "1.1.0", optional = true }
 rayon = { version = "1.10", optional = true }
 
 [package.metadata.docs.rs]

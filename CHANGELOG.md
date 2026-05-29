@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- Replaced external generic `delaunay` crate dependency with a custom, highly optimized 3D Delaunay triangulation.
+- Integrated `robust` crate (Jonathan Shewchuk's adaptive precision predicates) to achieve allocation-free orientation and in-sphere queries.
+- Added an incremental 3D KD-Tree to accelerate point location queries from $O(N^{4/3})$ to $O(N \log N)$ by starting the visibility walk from the nearest already-inserted vertex.
+- Protected against numerical degeneracies caused by coincident/duplicate point insertions.
+- Achieved a ~40% to 61% speedup in 3D Delaunay index construction.
+
 ## 0.6.2
 
 - Add SIMD optimizations
