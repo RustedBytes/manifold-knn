@@ -39,6 +39,8 @@
 //! # Ok::<(), manifold_knn::Error>(())
 //! ```
 
+#![cfg_attr(feature = "simd", feature(portable_simd))]
+
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -327,17 +329,13 @@ impl<const D: usize> ManifoldKnn<D> {
             workspace.processed.resize(self.points.len(), false);
         }
 
-        loop {
-            let Some(index) = workspace
-                .candidates
-                .as_slice()
-                .iter()
-                .find(|candidate| !workspace.processed[candidate.index])
-                .map(|candidate| candidate.index)
-            else {
-                break;
-            };
-
+        while let Some(index) = workspace
+            .candidates
+            .as_slice()
+            .iter()
+            .find(|candidate| !workspace.processed[candidate.index])
+            .map(|candidate| candidate.index)
+        {
             workspace.processed[index] = true;
             workspace.visited_indices.push(index);
 
@@ -745,6 +743,60 @@ pub(crate) fn validate_query<const D: usize>(query: &[f64; D]) -> Result<(), Err
     Ok(())
 }
 
+#[cfg(feature = "simd")]
+#[inline]
+pub(crate) fn squared_distance<const D: usize>(point: &[f64; D], query: &[f64; D]) -> f64 {
+    use std::simd::{f64x4, num::SimdFloat};
+
+    if D == 0 {
+        return 0.0;
+    }
+
+    // Fast path for the most common small dimensions (D=2, D=3, D=4)
+    // This covers the vast majority of point-cloud use cases.
+    if D <= 4 {
+        let mut p = [0.0_f64; 4];
+        let mut q = [0.0_f64; 4];
+        p[..D].copy_from_slice(&point[..D]);
+        q[..D].copy_from_slice(&query[..D]);
+        let pv = f64x4::from_array(p);
+        let qv = f64x4::from_array(q);
+        let diff = pv - qv;
+        return (diff * diff).reduce_sum();
+    }
+
+    // General case: process 4 elements at a time using SIMD
+    let mut sum = 0.0_f64;
+    let mut i = 0;
+
+    while i + 4 <= D {
+        let pv = f64x4::from_array([
+            point[i],
+            point[i + 1],
+            point[i + 2],
+            point[i + 3],
+        ]);
+        let qv = f64x4::from_array([
+            query[i],
+            query[i + 1],
+            query[i + 2],
+            query[i + 3],
+        ]);
+        let diff = pv - qv;
+        sum += (diff * diff).reduce_sum();
+        i += 4;
+    }
+
+    // Handle remaining elements (0-3)
+    for j in i..D {
+        let delta = point[j] - query[j];
+        sum += delta * delta;
+    }
+
+    sum
+}
+
+#[cfg(not(feature = "simd"))]
 #[inline]
 pub(crate) fn squared_distance<const D: usize>(point: &[f64; D], query: &[f64; D]) -> f64 {
     let mut sum = 0.0;

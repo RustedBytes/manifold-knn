@@ -42,7 +42,27 @@ manifold-knn = { version = "0.6.1" }
 manifold-knn = { version = "0.6.1", features = ["delaunay-3d"] }
 ```
 
-The optional backend currently pins `delaunay = "=0.7.8"`. That crate declares Rust 1.95, so this package also declares Rust 1.95.
+Parallel processing (for large successor table construction and validation):
+
+```toml
+[dependencies]
+manifold-knn = { version = "0.6.1", features = ["parallel"] }
+```
+
+SIMD-accelerated distance calculations (uses `std::simd`):
+
+```toml
+[dependencies]
+manifold-knn = { version = "0.6.1", features = ["simd"] }
+```
+
+The `simd` feature requires a **nightly** Rust compiler because it depends on the unstable `portable_simd` feature:
+
+```bash
+cargo +nightly test --features simd
+```
+
+The optional `delaunay` backend currently pins `delaunay = "=0.7.8"`. That crate declares Rust 1.95, so this package also declares Rust 1.95.
 
 ## Quick start
 
@@ -210,8 +230,9 @@ The intended checks are:
 ```bash
 cargo fmt --all --check
 cargo test
-cargo test --features delaunay-3d
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --features delaunay-3d,parallel
+cargo +nightly test --features simd
+cargo +nightly clippy --all-targets --all-features -- -D warnings
 ```
 
 The included tests compare DP queries against brute force under complete successor tables, prefix restrictions, insertion, deletion fallback, and feature-gated 3D Delaunay construction.

@@ -99,5 +99,41 @@ fn bench_query(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_index_build, bench_query);
+/// Benchmarks that heavily exercise the core distance calculation (`squared_distance`).
+///
+/// This is the primary target of the optional `simd` feature. Run the benchmarks
+/// both with and without the feature to measure the speedup:
+///
+/// ```bash
+/// # Scalar (standard) version
+/// cargo bench
+///
+/// # SIMD (enhanced) version - requires nightly
+/// cargo +nightly bench --features simd
+/// ```
+fn bench_distance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Distance Calculations (brute force)");
+
+    // Large point cloud to stress the hot path in squared_distance.
+    // We use a minimal successor table because brute_force_knn does not use it.
+    let n = 100_000;
+    let points = pseudo_random_points(n);
+    let neighbors_at_insertion: Vec<Vec<usize>> = (0..n).map(|_| Vec::new()).collect();
+
+    let index = ManifoldKnn::<3>::from_insertion_neighbors(points, neighbors_at_insertion)
+        .expect("failed to build index for distance benchmark");
+
+    let query = [0.5, 0.5, 0.5];
+
+    // Each iteration performs ~100k distance calculations (full linear scan)
+    group.bench_function("brute_force_knn_100k_points_k50", |b| {
+        b.iter(|| {
+            let _ = index.brute_force_knn(&query, 50).unwrap();
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_index_build, bench_query, bench_distance);
 criterion_main!(benches);
