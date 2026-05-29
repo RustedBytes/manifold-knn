@@ -99,18 +99,33 @@ fn bench_query(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks that heavily exercise the core distance calculation (`squared_distance`).
-///
-/// This is the primary target of the optional `simd` feature. Run the benchmarks
-/// both with and without the feature to measure the speedup:
-///
-/// ```bash
-/// # Scalar (standard) version
-/// cargo bench
-///
-/// # SIMD (enhanced) version - requires nightly
-/// cargo +nightly bench --features simd
-/// ```
+/** Benchmarks that heavily exercise the core distance calculation (`squared_distance`).
+
+This is the primary target of the optional `simd` feature.
+
+## Running the full distance benchmark
+
+```bash
+# Scalar (standard)
+cargo bench
+
+# SIMD (enhanced) — requires nightly
+cargo +nightly bench --features simd
+```
+
+## Running *only* the distance benchmark
+
+```bash
+# Only distance-related benchmarks (scalar)
+cargo bench -- "Distance Calculations"
+
+# Only distance-related benchmarks (SIMD)
+cargo +nightly bench --features simd -- "Distance Calculations"
+
+# Even more specific (just the 100k-point brute-force test)
+cargo bench -- "brute_force_knn_100k_points_k50"
+```
+*/
 fn bench_distance(c: &mut Criterion) {
     let mut group = c.benchmark_group("Distance Calculations (brute force)");
 
