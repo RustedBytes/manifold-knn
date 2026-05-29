@@ -78,8 +78,8 @@ fn synchronized_insert_matches_bruteforce() -> Result<(), manifold_knn::Error> {
 }
 
 #[test]
-fn synchronized_delete_keeps_queries_exact_with_conservative_edges(
-) -> Result<(), manifold_knn::Error> {
+fn synchronized_delete_keeps_queries_exact_with_conservative_edges()
+-> Result<(), manifold_knn::Error> {
     let mut index = DelaunayManifoldKnn3::from_points(vec![
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],

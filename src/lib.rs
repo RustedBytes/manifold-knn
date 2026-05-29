@@ -55,7 +55,7 @@ pub use delaunay3d::{Delaunay3dKernel, DelaunayManifoldKnn3, DelaunayTriangulati
 pub use error::Error;
 pub use table::SuccessorTable;
 
-use bounded::{neighbor_cmp, BoundedNeighbors};
+use bounded::{BoundedNeighbors, neighbor_cmp};
 
 /// A nearest-neighbor result.
 #[derive(Clone, Copy, Debug, PartialEq)]

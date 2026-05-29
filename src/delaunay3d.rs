@@ -12,7 +12,7 @@ use delaunay::prelude::construction::DelaunayTriangulation;
 use delaunay::prelude::geometry::{AdaptiveKernel, Point};
 use delaunay::prelude::tds::{Vertex, VertexKey};
 
-use crate::{validate_point, DeleteReport, Error, ManifoldKnn, Neighbor, SuccessorTable};
+use crate::{DeleteReport, Error, ManifoldKnn, Neighbor, SuccessorTable, validate_point};
 
 type Vertex3 = Vertex<f64, usize, 3>;
 

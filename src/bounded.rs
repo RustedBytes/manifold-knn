@@ -31,12 +31,11 @@ impl BoundedNeighbors {
             return false;
         }
 
-        if self.items.len() == self.capacity {
-            if let Some(worst) = self.items.last() {
-                if neighbor_cmp(worst, &neighbor) != Ordering::Greater {
-                    return false;
-                }
-            }
+        if self.items.len() == self.capacity
+            && let Some(worst) = self.items.last()
+            && neighbor_cmp(worst, &neighbor) != Ordering::Greater
+        {
+            return false;
         }
 
         let position = self
