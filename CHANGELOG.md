@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.3
+
+- Optimized successor table layout using a flat Compressed Sparse Row (CSR) array, reducing heap allocations from one allocation per point to exactly two flat vectors, improving traversal cache locality and construction speeds.
+- Pre-counted and slice-constructed successor arrays, eliminating intermediate dynamic allocations during index construction.
+- Introduced `discovered` tracker to `QueryWorkspace` to prevent duplicate distance calculations and redundant candidate list insertions, improving query speeds.
+- Added cross-crate inlining annotations on query-critical functions.
+- Expanded the benchmark suite to include a `knn_k_100` case.
+
 ## 0.7.1
 
 - Implemented a walk-based point location algorithm starting from the last inserted tetrahedron, combined with Biased Randomized Incremental Ordering (BRIO) and spatial Z-order sorting to achieve average-case $O(1)$ point location complexity without needing any KD-Tree.

@@ -206,6 +206,7 @@ impl<const D: usize> ManifoldKnn<D> {
     /// paper, these come from incremental Delaunay construction.
     ///
     /// Returns the birth index assigned to the inserted point.
+    #[inline]
     pub fn insert_with_neighbors<I>(
         &mut self,
         point: [f64; D],
@@ -245,6 +246,7 @@ impl<const D: usize> ManifoldKnn<D> {
     }
 
     /// Returns the nearest active point in the full index.
+    #[inline]
     pub fn nearest(&self, query: &[f64; D]) -> Result<Option<Neighbor>, Error> {
         WORKSPACE.with(|ws| {
             let mut workspace = ws.borrow_mut();
@@ -253,6 +255,7 @@ impl<const D: usize> ManifoldKnn<D> {
     }
 
     /// Returns the nearest active point in the full index using a workspace to avoid allocations.
+    #[inline]
     pub fn nearest_with_workspace(
         &self,
         query: &[f64; D],
@@ -266,11 +269,13 @@ impl<const D: usize> ManifoldKnn<D> {
     ///
     /// Results are sorted by squared distance, with birth index used as a stable
     /// tie-breaker.
+    #[inline]
     pub fn knn(&self, query: &[f64; D], k: usize) -> Result<Vec<Neighbor>, Error> {
         self.knn_prefix(query, k, self.points.len())
     }
 
     /// Returns up to `k` nearest active points in the full index using a workspace.
+    #[inline]
     pub fn knn_with_workspace<'a>(
         &self,
         query: &[f64; D],
@@ -284,6 +289,7 @@ impl<const D: usize> ManifoldKnn<D> {
     ///
     /// This is the paper's zero-overhead prefix-subset query. The same successor
     /// table is reused; candidates outside the prefix are ignored.
+    #[inline]
     pub fn knn_prefix(
         &self,
         query: &[f64; D],
@@ -298,6 +304,7 @@ impl<const D: usize> ManifoldKnn<D> {
     }
 
     /// Returns up to `k` nearest active points whose birth index is `< prefix_len` using a workspace.
+    #[inline]
     pub fn knn_prefix_with_workspace<'a>(
         &self,
         query: &[f64; D],
@@ -327,6 +334,17 @@ impl<const D: usize> ManifoldKnn<D> {
         if workspace.processed.len() < self.points.len() {
             workspace.processed.resize(self.points.len(), false);
         }
+        if workspace.discovered.len() < self.points.len() {
+            workspace.discovered.resize(self.points.len(), false);
+        }
+
+        for candidate in workspace.candidates.as_slice() {
+            let idx = candidate.index;
+            if !workspace.discovered[idx] {
+                workspace.discovered[idx] = true;
+                workspace.visited_indices.push(idx);
+            }
+        }
 
         while let Some(index) = workspace
             .candidates
@@ -336,15 +354,20 @@ impl<const D: usize> ManifoldKnn<D> {
             .map(|candidate| candidate.index)
         {
             workspace.processed[index] = true;
-            workspace.visited_indices.push(index);
 
             for &successor in self.successors.list(index) {
                 if successor >= prefix_len {
                     break;
                 }
+                if workspace.discovered[successor] {
+                    continue;
+                }
                 if !self.active[successor] {
                     continue;
                 }
+                workspace.discovered[successor] = true;
+                workspace.visited_indices.push(successor);
+
                 workspace.candidates.insert(Neighbor {
                     index: successor,
                     squared_distance: squared_distance(&self.points[successor], query),
@@ -354,6 +377,7 @@ impl<const D: usize> ManifoldKnn<D> {
 
         for &index in &workspace.visited_indices {
             workspace.processed[index] = false;
+            workspace.discovered[index] = false;
         }
         workspace.visited_indices.clear();
 
@@ -365,6 +389,7 @@ impl<const D: usize> ManifoldKnn<D> {
     /// Transition sites are the successive points that become the nearest
     /// neighbor during the birth-ordered insertion history. The returned list is
     /// sorted by query distance and capped to `capacity` entries.
+    #[inline]
     pub fn transition_sites(
         &self,
         query: &[f64; D],
@@ -374,6 +399,7 @@ impl<const D: usize> ManifoldKnn<D> {
     }
 
     /// Collects transition sites using a workspace.
+    #[inline]
     pub fn transition_sites_with_workspace<'a>(
         &self,
         query: &[f64; D],
@@ -384,6 +410,7 @@ impl<const D: usize> ManifoldKnn<D> {
     }
 
     /// Prefix-restricted variant of [`Self::transition_sites`].
+    #[inline]
     pub fn transition_sites_prefix(
         &self,
         query: &[f64; D],
@@ -403,6 +430,7 @@ impl<const D: usize> ManifoldKnn<D> {
     }
 
     /// Prefix-restricted variant of [`Self::transition_sites`] using a workspace.
+    #[inline]
     pub fn transition_sites_prefix_with_workspace<'a>(
         &self,
         query: &[f64; D],
@@ -418,11 +446,13 @@ impl<const D: usize> ManifoldKnn<D> {
     /// Brute-force k-NN over the active full index.
     ///
     /// This is intended for validation and benchmarking, not production queries.
+    #[inline]
     pub fn brute_force_knn(&self, query: &[f64; D], k: usize) -> Result<Vec<Neighbor>, Error> {
         self.brute_force_knn_prefix(query, k, self.points.len())
     }
 
     /// Brute-force k-NN over active points with birth index `< prefix_len`.
+    #[inline]
     pub fn brute_force_knn_prefix(
         &self,
         query: &[f64; D],
@@ -458,6 +488,7 @@ impl<const D: usize> ManifoldKnn<D> {
     /// Each pair `(i, j)` in `new_successors` means "insert successor edge
     /// `i -> j`" and must satisfy `i < j`; both endpoints must be active and must
     /// not be the deleted point.
+    #[inline]
     pub fn delete_with_new_successors<I>(
         &mut self,
         index: usize,
@@ -504,6 +535,7 @@ impl<const D: usize> ManifoldKnn<D> {
     /// deletion but do not yet have local Delaunay-update integration. It discards
     /// the accelerated successor table and should only be used for small or test
     /// data.
+    #[inline]
     pub fn delete_rebuild_complete(&mut self, index: usize) -> Result<DeleteReport, Error> {
         self.ensure_active_index(index)?;
         let removed_references = self.successors.remove_references_to(index);
@@ -530,6 +562,7 @@ impl<const D: usize> ManifoldKnn<D> {
         })
     }
 
+    #[inline]
     fn transition_sites_internal_with_workspace(
         &self,
         query: &[f64; D],
@@ -554,6 +587,7 @@ impl<const D: usize> ManifoldKnn<D> {
         )
     }
 
+    #[inline]
     fn transition_sites_internal_from_index_with_workspace(
         &self,
         query: &[f64; D],
@@ -678,6 +712,7 @@ impl<const D: usize> ManifoldKnn<D> {
 #[derive(Clone, Debug, Default)]
 pub struct QueryWorkspace {
     processed: Vec<bool>,
+    discovered: Vec<bool>,
     visited_indices: Vec<usize>,
     candidates: BoundedNeighbors,
 }
@@ -689,6 +724,7 @@ impl QueryWorkspace {
     pub const fn new() -> Self {
         Self {
             processed: Vec::new(),
+            discovered: Vec::new(),
             visited_indices: Vec::new(),
             candidates: BoundedNeighbors::new_empty(),
         }

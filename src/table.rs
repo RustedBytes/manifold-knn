@@ -2,26 +2,44 @@ use crate::Error;
 
 /// Successor table used by the Manifold k-NN dynamic program.
 ///
-/// List `i` stores later birth indices `j > i` whose insertion pruned the
-/// Voronoi cell of point `i`. In a Delaunay-based construction, when `j` is
-/// inserted, append `j` to every earlier Delaunay neighbor of `j`.
+/// Stores later birth indices `j > i` whose insertion pruned the Voronoi cell of point `i`.
+/// This implementation uses a Compressed Sparse Row (CSR) style flat array layout
+/// to eliminate memory allocations and improve cache locality during query traversals.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SuccessorTable {
-    lists: Vec<Vec<usize>>,
+    offsets: Vec<usize>,
+    successors: Vec<usize>,
 }
 
 impl SuccessorTable {
     /// Creates an empty successor table with `len` lists.
     #[must_use]
+    #[inline]
     pub fn empty(len: usize) -> Self {
         Self {
-            lists: vec![Vec::new(); len],
+            offsets: vec![0; len + 1],
+            successors: Vec::new(),
         }
     }
 
     /// Creates a successor table from already sorted, duplicate-free lists.
+    #[inline]
     pub fn try_from_lists(lists: Vec<Vec<usize>>) -> Result<Self, Error> {
-        let table = Self { lists };
+        let mut offsets = Vec::with_capacity(lists.len() + 1);
+        offsets.push(0);
+        let mut total_successors = 0;
+        for list in &lists {
+            total_successors += list.len();
+            offsets.push(total_successors);
+        }
+        let mut successors = vec![0; total_successors];
+        let mut idx = 0;
+        for list in lists {
+            let len = list.len();
+            successors[idx..idx + len].copy_from_slice(&list);
+            idx += len;
+        }
+        let table = Self { offsets, successors };
         table.validate()?;
         Ok(table)
     }
@@ -30,6 +48,7 @@ impl SuccessorTable {
     /// duplicate entries.
     ///
     /// Entries are sorted and deduplicated before validation.
+    #[inline]
     pub fn from_lists_normalized(mut lists: Vec<Vec<usize>>) -> Result<Self, Error> {
         #[cfg(feature = "parallel")]
         {
@@ -56,33 +75,23 @@ impl SuccessorTable {
     /// it costs `O(n^2)` memory and query work in the worst case.
     #[must_use]
     pub fn complete(len: usize) -> Self {
-        #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
-            let lists = (0..len)
-                .into_par_iter()
-                .map(|owner| {
-                    let mut list = Vec::with_capacity(len.saturating_sub(owner + 1));
-                    for successor in (owner + 1)..len {
-                        list.push(successor);
-                    }
-                    list
-                })
-                .collect();
-            Self { lists }
+        let mut offsets = Vec::with_capacity(len + 1);
+        offsets.push(0);
+        let mut total = 0;
+        for owner in 0..len {
+            total += len.saturating_sub(owner + 1);
+            offsets.push(total);
         }
-        #[cfg(not(feature = "parallel"))]
-        {
-            let mut lists = Vec::with_capacity(len);
-            for owner in 0..len {
-                let mut list = Vec::with_capacity(len.saturating_sub(owner + 1));
-                for successor in (owner + 1)..len {
-                    list.push(successor);
-                }
-                lists.push(list);
+
+        let mut successors = vec![0; total];
+        let mut idx = 0;
+        for owner in 0..len {
+            for successor in (owner + 1)..len {
+                successors[idx] = successor;
+                idx += 1;
             }
-            Self { lists }
         }
+        Self { offsets, successors }
     }
 
     /// Builds a successor table from insertion-time neighbor lists.
@@ -91,7 +100,7 @@ impl SuccessorTable {
     /// `j` at insertion time. This constructor appends `j` to each list `i`.
     pub fn from_insertion_neighbors(
         len: usize,
-        neighbors_at_insertion: Vec<Vec<usize>>,
+        mut neighbors_at_insertion: Vec<Vec<usize>>,
     ) -> Result<Self, Error> {
         if neighbors_at_insertion.len() != len {
             return Err(Error::TableLengthMismatch {
@@ -101,8 +110,6 @@ impl SuccessorTable {
         }
 
         #[cfg(feature = "parallel")]
-        let mut neighbors_at_insertion = neighbors_at_insertion;
-        #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
             neighbors_at_insertion.par_iter_mut().for_each(|neighbors| {
@@ -110,23 +117,47 @@ impl SuccessorTable {
                 neighbors.dedup();
             });
         }
-
-        let mut table = Self::empty(len);
-        for (inserted, neighbors) in neighbors_at_insertion.into_iter().enumerate() {
-            #[cfg(not(feature = "parallel"))]
-            let neighbors = {
-                let mut neighbors = neighbors;
+        #[cfg(not(feature = "parallel"))]
+        {
+            for neighbors in &mut neighbors_at_insertion {
                 neighbors.sort_unstable();
                 neighbors.dedup();
-                neighbors
-            };
-            for neighbor in neighbors {
+            }
+        }
+
+        // Count successor list sizes
+        let mut counts = vec![0; len];
+        for (inserted, neighbors) in neighbors_at_insertion.iter().enumerate() {
+            for &neighbor in neighbors {
                 if neighbor >= inserted {
                     return Err(Error::InvalidInsertionNeighbor { inserted, neighbor });
                 }
-                table.lists[neighbor].push(inserted);
+                counts[neighbor] += 1;
             }
         }
+
+        // Compute offsets
+        let mut offsets = Vec::with_capacity(len + 1);
+        offsets.push(0);
+        let mut total = 0;
+        for &count in &counts {
+            total += count;
+            offsets.push(total);
+        }
+
+        // Populate successors using write cursors to keep track of write positions.
+        let mut write_cursors = offsets[..len].to_vec();
+        let mut successors = vec![0; total];
+
+        for (inserted, neighbors) in neighbors_at_insertion.into_iter().enumerate() {
+            for neighbor in neighbors {
+                let pos = &mut write_cursors[neighbor];
+                successors[*pos] = inserted;
+                *pos += 1;
+            }
+        }
+
+        let table = Self { offsets, successors };
         table.validate()?;
         Ok(table)
     }
@@ -135,21 +166,21 @@ impl SuccessorTable {
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.lists.len()
+        self.offsets.len().saturating_sub(1)
     }
 
     /// Returns `true` when there are no successor lists.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.lists.is_empty()
+        self.len() == 0
     }
 
-    /// Returns all successor lists.
+    /// Returns all successor lists as an iterator over slices.
     #[must_use]
     #[inline]
-    pub fn lists(&self) -> &[Vec<usize>] {
-        &self.lists
+    pub fn lists(&self) -> impl Iterator<Item = &[usize]> + '_ {
+        (0..self.len()).map(move |owner| self.list(owner))
     }
 
     /// Returns a successor list by owner index.
@@ -160,23 +191,15 @@ impl SuccessorTable {
     #[must_use]
     #[inline]
     pub fn list(&self, owner: usize) -> &[usize] {
-        &self.lists[owner]
-    }
-
-    /// Returns a mutable successor list by owner index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `owner >= self.len()`.
-    #[must_use]
-    #[inline]
-    pub fn list_mut(&mut self, owner: usize) -> &mut Vec<usize> {
-        &mut self.lists[owner]
+        let start = self.offsets[owner];
+        let end = self.offsets[owner + 1];
+        &self.successors[start..end]
     }
 
     /// Appends a new empty list. This is used when inserting a new point.
+    #[inline]
     pub fn push_empty_list(&mut self) {
-        self.lists.push(Vec::new());
+        self.offsets.push(self.successors.len());
     }
 
     /// Inserts successor edge `owner -> successor` while preserving sorted order.
@@ -185,11 +208,17 @@ impl SuccessorTable {
     /// present.
     pub fn insert_successor(&mut self, owner: usize, successor: usize) -> Result<bool, Error> {
         self.validate_successor(owner, successor)?;
-        let list = &mut self.lists[owner];
+        let start = self.offsets[owner];
+        let end = self.offsets[owner + 1];
+        let list = &self.successors[start..end];
         match list.binary_search(&successor) {
             Ok(_) => Ok(false),
-            Err(position) => {
-                list.insert(position, successor);
+            Err(pos) => {
+                let insert_pos = start + pos;
+                self.successors.insert(insert_pos, successor);
+                for offset in &mut self.offsets[owner + 1..] {
+                    *offset += 1;
+                }
                 Ok(true)
             }
         }
@@ -200,84 +229,108 @@ impl SuccessorTable {
     /// Returns the number of removed references.
     pub fn remove_references_to(&mut self, successor: usize) -> usize {
         let mut removed = 0;
-        for list in &mut self.lists {
-            let old_len = list.len();
-            list.retain(|&value| value != successor);
-            removed += old_len - list.len();
+        let mut write_idx = 0;
+        let original_offsets = self.offsets.clone();
+
+        for owner in 0..self.len() {
+            let start = original_offsets[owner];
+            let end = original_offsets[owner + 1];
+            for read_idx in start..end {
+                let val = self.successors[read_idx];
+                if val == successor {
+                    removed += 1;
+                } else {
+                    self.successors[write_idx] = val;
+                    write_idx += 1;
+                }
+            }
+            self.offsets[owner + 1] = write_idx;
         }
+        self.successors.truncate(write_idx);
         removed
     }
 
     /// Clears one successor list.
     pub fn clear_list(&mut self, owner: usize) -> Result<(), Error> {
-        if owner >= self.lists.len() {
+        if owner >= self.len() {
             return Err(Error::InvalidIndex {
                 index: owner,
-                len: self.lists.len(),
+                len: self.len(),
             });
         }
-        self.lists[owner].clear();
+        let start = self.offsets[owner];
+        let end = self.offsets[owner + 1];
+        let len_to_remove = end - start;
+        if len_to_remove > 0 {
+            self.successors.drain(start..end);
+            for offset in &mut self.offsets[owner + 1..] {
+                *offset -= len_to_remove;
+            }
+        }
         Ok(())
     }
 
     /// Clears every successor list while preserving table length.
     pub fn clear_all(&mut self) {
-        for list in &mut self.lists {
-            list.clear();
-        }
+        self.successors.clear();
+        self.offsets.fill(0);
     }
 
     /// Validates the table against its own length.
+    #[inline]
     pub fn validate(&self) -> Result<(), Error> {
-        self.validate_for_len(self.lists.len())
+        self.validate_for_len(self.len())
     }
 
     /// Validates the table for a point array of length `len`.
     pub fn validate_for_len(&self, len: usize) -> Result<(), Error> {
-        if self.lists.len() != len {
+        if self.len() != len {
             return Err(Error::TableLengthMismatch {
                 points: len,
-                lists: self.lists.len(),
+                lists: self.len(),
             });
         }
 
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            self.lists
-                .par_iter()
-                .enumerate()
-                .try_for_each(|(owner, list)| {
-                    let mut previous = None;
-                    for &successor in list {
-                        if successor <= owner || successor >= len {
-                            return Err(Error::InvalidSuccessor {
+            (0..len).into_par_iter().try_for_each(|owner| {
+                let start = self.offsets[owner];
+                let end = self.offsets[owner + 1];
+                let list = &self.successors[start..end];
+                let mut previous = None;
+                for &successor in list {
+                    if successor <= owner || successor >= len {
+                        return Err(Error::InvalidSuccessor {
+                            owner,
+                            successor,
+                            len,
+                        });
+                    }
+
+                    if let Some(prev) = previous {
+                        if successor == prev {
+                            return Err(Error::DuplicateSuccessor { owner, successor });
+                        }
+                        if successor < prev {
+                            return Err(Error::UnsortedSuccessorList {
                                 owner,
-                                successor,
-                                len,
+                                previous: prev,
+                                current: successor,
                             });
                         }
-
-                        if let Some(prev) = previous {
-                            if successor == prev {
-                                return Err(Error::DuplicateSuccessor { owner, successor });
-                            }
-                            if successor < prev {
-                                return Err(Error::UnsortedSuccessorList {
-                                    owner,
-                                    previous: prev,
-                                    current: successor,
-                                });
-                            }
-                        }
-                        previous = Some(successor);
                     }
-                    Ok(())
-                })
+                    previous = Some(successor);
+                }
+                Ok(())
+            })
         }
         #[cfg(not(feature = "parallel"))]
         {
-            for (owner, list) in self.lists.iter().enumerate() {
+            for owner in 0..len {
+                let start = self.offsets[owner];
+                let end = self.offsets[owner + 1];
+                let list = &self.successors[start..end];
                 let mut previous = None;
                 for &successor in list {
                     if successor <= owner || successor >= len {
@@ -308,17 +361,17 @@ impl SuccessorTable {
     }
 
     fn validate_successor(&self, owner: usize, successor: usize) -> Result<(), Error> {
-        if owner >= self.lists.len() {
+        if owner >= self.len() {
             return Err(Error::InvalidIndex {
                 index: owner,
-                len: self.lists.len(),
+                len: self.len(),
             });
         }
-        if successor <= owner || successor >= self.lists.len() {
+        if successor <= owner || successor >= self.len() {
             return Err(Error::InvalidSuccessor {
                 owner,
                 successor,
-                len: self.lists.len(),
+                len: self.len(),
             });
         }
         Ok(())

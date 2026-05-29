@@ -96,6 +96,14 @@ fn bench_query(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("knn_k_100", |b| {
+        b.iter(|| {
+            let _ = index
+                .knn_with_workspace(&query, 100, &mut workspace)
+                .unwrap();
+        });
+    });
+
     group.finish();
 }
 
