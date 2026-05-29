@@ -310,19 +310,21 @@ impl<const D: usize> ManifoldKnn<D> {
             return Ok(&[]);
         }
 
-        let active_in_prefix = self.active_prefix_len(prefix_len);
-        if active_in_prefix == 0 {
+        let Some(first_active) = self.first_active_before(prefix_len) else {
             workspace.candidates.reset(0);
             return Ok(&[]);
-        }
+        };
 
-        let capacity = k.min(active_in_prefix);
-        self.transition_sites_internal_with_workspace(query, capacity, prefix_len, workspace)?;
+        self.transition_sites_internal_from_index_with_workspace(
+            query,
+            k,
+            prefix_len,
+            first_active,
+            workspace,
+        )?;
 
         if workspace.processed.len() < self.points.len() {
             workspace.processed.resize(self.points.len(), false);
-        } else {
-            workspace.processed[..self.points.len()].fill(false);
         }
 
         loop {
@@ -337,6 +339,8 @@ impl<const D: usize> ManifoldKnn<D> {
             };
 
             workspace.processed[index] = true;
+            workspace.visited_indices.push(index);
+
             for &successor in self.successors.list(index) {
                 if successor >= prefix_len {
                     break;
@@ -350,6 +354,11 @@ impl<const D: usize> ManifoldKnn<D> {
                 });
             }
         }
+
+        for &index in &workspace.visited_indices {
+            workspace.processed[index] = false;
+        }
+        workspace.visited_indices.clear();
 
         Ok(workspace.candidates.as_slice())
     }
@@ -531,14 +540,35 @@ impl<const D: usize> ManifoldKnn<D> {
         prefix_len: usize,
         workspace: &mut QueryWorkspace,
     ) -> Result<(), Error> {
+        if capacity == 0 {
+            workspace.candidates.reset(0);
+            return Ok(());
+        }
+        let Some(first_active) = self.first_active_before(prefix_len) else {
+            workspace.candidates.reset(capacity);
+            return Ok(());
+        };
+        self.transition_sites_internal_from_index_with_workspace(
+            query,
+            capacity,
+            prefix_len,
+            first_active,
+            workspace,
+        )
+    }
+
+    fn transition_sites_internal_from_index_with_workspace(
+        &self,
+        query: &[f64; D],
+        capacity: usize,
+        prefix_len: usize,
+        mut current: usize,
+        workspace: &mut QueryWorkspace,
+    ) -> Result<(), Error> {
         workspace.candidates.reset(capacity);
         if capacity == 0 {
             return Ok(());
         }
-
-        let Some(mut current) = self.first_active_before(prefix_len) else {
-            return Ok(());
-        };
 
         workspace.candidates.insert(Neighbor {
             index: current,
@@ -588,14 +618,6 @@ impl<const D: usize> ManifoldKnn<D> {
             });
         }
         Ok(())
-    }
-
-    #[inline]
-    fn active_prefix_len(&self, prefix_len: usize) -> usize {
-        self.active[..prefix_len]
-            .iter()
-            .filter(|&&is_active| is_active)
-            .count()
     }
 
     #[inline]
@@ -659,6 +681,7 @@ impl<const D: usize> ManifoldKnn<D> {
 #[derive(Clone, Debug, Default)]
 pub struct QueryWorkspace {
     processed: Vec<bool>,
+    visited_indices: Vec<usize>,
     candidates: BoundedNeighbors,
 }
 
@@ -669,6 +692,7 @@ impl QueryWorkspace {
     pub const fn new() -> Self {
         Self {
             processed: Vec::new(),
+            visited_indices: Vec::new(),
             candidates: BoundedNeighbors::new_empty(),
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "manifold-knn"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Dynamic-programming k-nearest-neighbor queries over birth-ordered point clouds, with optional 3D Delaunay construction."

@@ -70,5 +70,34 @@ fn bench_index_build(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_index_build);
+fn bench_query(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Query");
+    let size = 10000;
+    let points = pseudo_random_points(size);
+    // Sparse neighbor lists: every point connects to a few prior ones
+    let neighbors_at_insertion: Vec<Vec<usize>> = (0..size)
+        .map(|j| {
+            let mut list = Vec::new();
+            for i in j.saturating_sub(5)..j {
+                list.push(i);
+            }
+            list
+        })
+        .collect();
+    let index = ManifoldKnn::<3>::from_insertion_neighbors(points, neighbors_at_insertion).unwrap();
+    let query = [0.5, 0.5, 0.5];
+    let mut workspace = manifold_knn::QueryWorkspace::new();
+
+    group.bench_function("knn_k_10", |b| {
+        b.iter(|| {
+            let _ = index
+                .knn_with_workspace(&query, 10, &mut workspace)
+                .unwrap();
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_index_build, bench_query);
 criterion_main!(benches);
